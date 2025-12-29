@@ -1,2 +1,12 @@
-run = "pip install -r requirements.txt && python main.py"
-language = "python3"
+modules = ["python-3.11"]
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+run = ["gunicorn", "jh_brain_sse_server_fixed:app", "--bind", "0.0.0.0:8000", "--workers", "1", "--timeout", "120"]
+deploymentTarget = "autoscale"
+
+[[ports]]
+localPort = 8000
+externalPort = 80
