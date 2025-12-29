@@ -1,3 +1,0 @@
-run = "python -m maestra_backend --mode cloud --port 8000"
-language = "python3"
-modules = ["python-3.10"]

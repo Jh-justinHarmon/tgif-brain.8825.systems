@@ -1,2 +1,0 @@
-run = "pip install -r requirements.txt && python -m backend_8825 --mode cloud --port 8000"
-language = "python3"

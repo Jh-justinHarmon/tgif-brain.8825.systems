@@ -1,0 +1,1399 @@
+{
+  "version": "2.1",
+  "last_updated": "2025-12-15",
+  "description": "Maps capabilities/needs to concrete tools. This is the 'nervous system reflex' that ensures we use existing tools instead of reinventing.",
+  "ce4_enhanced": true,
+  "tool_description_template": "protocols/TOOL_DESCRIPTION_TEMPLATE.md",
+  "forcing_functions": {
+    "require_plan_for_high_impact": true,
+    "high_impact_triggers": [
+      "create_mcp",
+      "new_worker",
+      "major_refactor",
+      "new_integration",
+      "architecture_change"
+    ],
+    "planning_workflow": "/plan-project",
+    "planning_mcp": "project-planning-mcp",
+    "soft_enforcement": true,
+    "override_flag": "skip_planning"
+  },
+  "capabilities": {
+    "export_docx": {
+      "keywords": [
+        "export",
+        "docx",
+        "word",
+        "document",
+        "word doc"
+      ],
+      "tool_id": "export_console",
+      "description": "Export Markdown to DOCX format",
+      "when_to_use": [
+        "User says 'export', 'word doc', 'send as document'",
+        "Creating deliverables for clients"
+      ],
+      "when_NOT_to_use": [
+        "Just previewing content",
+        "Content already in target format"
+      ],
+      "cost": "$0.00",
+      "latency": "<2s"
+    },
+    "browser_capture_review": {
+      "keywords": [
+        "review",
+        "browser capture",
+        "browser extension",
+        "captured chat",
+        "captured conversation",
+        "latest capture",
+        "chatgpt conversation captured"
+      ],
+      "tool_id": "get_browser_captures",
+      "mcp_server": "sentinel",
+      "description": "Review content captured via browser extension",
+      "when_to_use": [
+        "User says 'review the chat I captured'",
+        "User says 'review latest browser capture'",
+        "User mentions capturing a conversation with the extension"
+      ],
+      "when_NOT_to_use": [
+        "User wants to capture new content (that's the extension itself)",
+        "Reviewing non-captured content"
+      ],
+      "default_params": {
+        "kind": "chat_conversation",
+        "limit": 1
+      },
+      "cost": "$0.00",
+      "latency": "<1s"
+    },
+    "export_html": {
+      "keywords": [
+        "export",
+        "html",
+        "web",
+        "preview"
+      ],
+      "tool_id": "export_console",
+      "description": "Export Markdown to HTML format"
+    },
+    "export_markdown": {
+      "keywords": [
+        "export",
+        "markdown",
+        "md",
+        "render",
+        "preview"
+      ],
+      "tool_id": "export_console",
+      "description": "Render and preview Markdown"
+    },
+    "capture_session": {
+      "keywords": [
+        "capture",
+        "session",
+        "library",
+        "knowledge",
+        "learn"
+      ],
+      "tool_id": "memory_hub",
+      "description": "Capture session learnings into Library",
+      "when_to_use": [
+        "End of productive session with decisions/patterns",
+        "User says 'capture this', 'remember this'",
+        "BEFORE writing markdown summaries"
+      ],
+      "when_NOT_to_use": [
+        "Session was just Q&A with no new learnings",
+        "Content already in Library",
+        "Creating protocol files (use assimilate_memory)"
+      ],
+      "cost": "$0.00 with pattern_first=True",
+      "latency": "2-5s"
+    },
+    "assimilate_memory": {
+      "keywords": [
+        "assimilate",
+        "memory",
+        "protocol",
+        "behavior",
+        "rule"
+      ],
+      "tool_id": "memory_hub",
+      "description": "Assimilate behavioral rules into protocols"
+    },
+    "search_knowledge": {
+      "keywords": [
+        "search",
+        "find",
+        "knowledge",
+        "library",
+        "what do we know"
+      ],
+      "tool_id": "memory_hub",
+      "description": "Search the Library for knowledge"
+    },
+    "context_gather": {
+      "keywords": [
+        "context",
+        "gather",
+        "unified",
+        "rag",
+        "all sources",
+        "internal context"
+      ],
+      "tool_id": "context_builder",
+      "description": "Gather context from all internal sources (Memory Hub, Sentinel, DLI)",
+      "when_to_use": [
+        "Need context from multiple sources at once",
+        "Before external research to check internal knowledge",
+        "Building RAG context for LLM prompts"
+      ],
+      "when_NOT_to_use": [
+        "Simple single-source queries",
+        "Already have specific source in mind"
+      ],
+      "cost": "$0.00",
+      "latency": "<500ms"
+    },
+    "context_audit": {
+      "keywords": [
+        "audit",
+        "investigate",
+        "multi-hop",
+        "reasoning chain",
+        "compare"
+      ],
+      "tool_id": "context_builder",
+      "description": "Multi-hop audit mode for investigations",
+      "when_to_use": [
+        "Investigating issues across multiple topics",
+        "Comparing alternatives",
+        "Deep reasoning chains"
+      ],
+      "cost": "$0.00",
+      "latency": "1-3s"
+    },
+    "deep_dive": {
+      "keywords": [
+        "deep dive",
+        "analyze",
+        "research",
+        "dli",
+        "pattern"
+      ],
+      "tool_id": "dli_router",
+      "description": "Run DLI deep dive with Pattern Engine",
+      "when_to_use": [
+        "Complex questions about 8825 internals",
+        "Need context from multiple sources",
+        "Analyzing architecture or decisions"
+      ],
+      "when_NOT_to_use": [
+        "Simple factual questions (direct answer)",
+        "External/web questions (use search_web)",
+        "Questions about specific files (use read_file)"
+      ],
+      "cost": "$0.001-0.01",
+      "latency": "3-10s"
+    },
+    "mistral_general": {
+      "keywords": [
+        "summarize",
+        "summary",
+        "analyze",
+        "draft",
+        "refactor",
+        "general",
+        "mistral"
+      ],
+      "tool_id": "mistral_gateway",
+      "profile": "general",
+      "description": "Mistral general specialist for analysis, summaries, light refactors"
+    },
+    "mistral_reasoning": {
+      "keywords": [
+        "reason",
+        "reasoning",
+        "think",
+        "strategy",
+        "triage",
+        "evaluate",
+        "complex",
+        "multi-step",
+        "pattern mining"
+      ],
+      "tool_id": "mistral_gateway",
+      "profile": "reasoning",
+      "description": "Mistral reasoning specialist for DLI triage, pattern mining, strategy, multi-step reasoning"
+    },
+    "mistral_code": {
+      "keywords": [
+        "code",
+        "coding",
+        "script",
+        "python",
+        "javascript",
+        "function",
+        "refactor",
+        "goose",
+        "mcp",
+        "infrastructure"
+      ],
+      "tool_id": "mistral_gateway",
+      "profile": "code",
+      "description": "Mistral code specialist (Codestral) for code generation, refactors, Goose/infra scripts"
+    },
+    "mistral_math": {
+      "keywords": [
+        "math",
+        "calculate",
+        "numeric",
+        "metrics",
+        "finance",
+        "ops",
+        "table",
+        "numbers",
+        "statistics"
+      ],
+      "tool_id": "mistral_gateway",
+      "profile": "math",
+      "description": "Mistral math specialist for numeric reasoning, metrics, ops/finance modeling"
+    },
+    "exploration_os": {
+      "keywords": [
+        "explore",
+        "exploration",
+        "exploration mode",
+        "explore this",
+        "let's explore",
+        "brainstorm",
+        "brainstorm mode"
+      ],
+      "tool_id": "exploration_os",
+      "description": "Run Exploration OS 7-step loop for high-uncertainty topics"
+    },
+    "ingest_transcript": {
+      "keywords": [
+        "transcript",
+        "ingest",
+        "otter",
+        "meeting",
+        "pain points"
+      ],
+      "tool_id": "transcript_intelligence",
+      "description": "Ingest and analyze transcripts"
+    },
+    "job_queue": {
+      "keywords": [
+        "queue",
+        "job",
+        "enqueue",
+        "dequeue",
+        "async",
+        "background"
+      ],
+      "tool_id": "infrastructure",
+      "description": "Enqueue and process background jobs"
+    },
+    "event_log": {
+      "keywords": [
+        "event",
+        "log",
+        "history",
+        "what happened",
+        "audit",
+        "timeline"
+      ],
+      "tool_id": "infrastructure",
+      "description": "Query event log for 8825 actions"
+    },
+    "otter_watcher": {
+      "keywords": [
+        "otter",
+        "watcher",
+        "dropbox",
+        "sync",
+        "detect",
+        "new files"
+      ],
+      "tool_id": "infrastructure",
+      "description": "Watch Otter Dropbox folder for new transcripts"
+    },
+    "run_worker": {
+      "keywords": [
+        "worker",
+        "process",
+        "ingest",
+        "background",
+        "run"
+      ],
+      "tool_id": "infrastructure",
+      "description": "Run a worker to process queued jobs"
+    },
+    "ocr_file": {
+      "keywords": [
+        "ocr",
+        "scan",
+        "image",
+        "pdf",
+        "extract text"
+      ],
+      "tool_id": "ocr_mcp",
+      "description": "Extract text from images/PDFs"
+    },
+    "ocr_mcp_BACKUP_20251124_0034": {
+      "keywords": [
+        "ocr",
+        "mcp",
+        "BACKUP",
+        "20251124",
+        "0034"
+      ],
+      "tool_id": "ocr-mcp-BACKUP-20251124-0034",
+      "description": "Auto-discovered: Ocr Mcp Backup 20251124 0034"
+    },
+    "jh_ocr_router_mcp": {
+      "keywords": [
+        "jh",
+        "ocr",
+        "router",
+        "mcp"
+      ],
+      "tool_id": "jh-ocr-router-mcp",
+      "description": "Auto-discovered: Jh Ocr Router Mcp"
+    },
+    "ocr_mcp": {
+      "keywords": [
+        "ocr",
+        "mcp"
+      ],
+      "tool_id": "ocr-mcp",
+      "description": "Auto-discovered: Ocr Mcp"
+    },
+    "integration_router_mcp": {
+      "keywords": [
+        "integration",
+        "router",
+        "mcp"
+      ],
+      "tool_id": "integration-router-mcp",
+      "description": "Auto-discovered: Integration Router Mcp"
+    },
+    "jh_ocr_router_mcp_BACKUP_20251124_0034": {
+      "keywords": [
+        "jh",
+        "ocr",
+        "router",
+        "mcp",
+        "BACKUP",
+        "20251124",
+        "0034"
+      ],
+      "tool_id": "jh-ocr-router-mcp-BACKUP-20251124-0034",
+      "description": "Auto-discovered: Jh Ocr Router Mcp Backup 20251124 0034"
+    },
+    "ollama_bridge": {
+      "keywords": [
+        "ollama",
+        "bridge"
+      ],
+      "tool_id": "ollama-bridge",
+      "description": "Auto-discovered: Ollama Bridge"
+    },
+    "unified_llm": {
+      "keywords": [
+        "llm",
+        "openrouter",
+        "ollama",
+        "language model",
+        "ai",
+        "chat",
+        "completion",
+        "resilient",
+        "fallback"
+      ],
+      "tool_id": "unified_llm_client",
+      "description": "Unified LLM client with OpenRouter → Ollama fallback",
+      "when_to_use": [
+        "Any LLM request needing automatic fallback",
+        "Cost-effective AI generation",
+        "Resilient AI calls"
+      ],
+      "when_NOT_to_use": [
+        "Direct API access needed",
+        "Specific model requirements"
+      ],
+      "cost": "$0-0.01 (local first)",
+      "latency": "<2s local, <5s cloud"
+    },
+    "local_search": {
+      "keywords": [
+        "search",
+        "duckduckgo",
+        "tavily",
+        "web search",
+        "research",
+        "find information"
+      ],
+      "tool_id": "local_search_client",
+      "description": "Local search with DuckDuckGo → Tavily fallback",
+      "when_to_use": [
+        "Web research",
+        "Information lookup",
+        "Fact finding"
+      ],
+      "when_NOT_to_use": [
+        "Real-time search required",
+        "Specialized databases"
+      ],
+      "cost": "$0 (free)",
+      "latency": "<3s"
+    },
+    "local_telemetry": {
+      "keywords": [
+        "telemetry",
+        "logging",
+        "monitoring",
+        "metrics",
+        "usage tracking",
+        "analytics"
+      ],
+      "tool_id": "local_telemetry",
+      "description": "Local JSON telemetry system",
+      "when_to_use": [
+        "Usage tracking",
+        "Performance monitoring",
+        "Cost analysis"
+      ],
+      "when_NOT_to_use": [
+        "Real-time dashboards",
+        "Cloud analytics needed"
+      ],
+      "cost": "$0",
+      "latency": "<1s"
+    },
+    "direct_file_processing": {
+      "keywords": [
+        "file processing",
+        "email parsing",
+        "transcript processing",
+        "local files",
+        "batch processing"
+      ],
+      "tool_id": "direct_file_processor",
+      "description": "Direct file processing without APIs",
+      "when_to_use": [
+        "Email processing",
+        "Transcript analysis",
+        "Local file batch processing"
+      ],
+      "when_NOT_to_use": [
+        "Cloud file access",
+        "Real-time file monitoring"
+      ],
+      "cost": "$0",
+      "latency": "<5s per file"
+    },
+    "resilience_stack": {
+      "keywords": [
+        "resilience",
+        "backup",
+        "fallback",
+        "local first",
+        "cost optimization",
+        "offline"
+      ],
+      "tool_id": "resilience_test",
+      "description": "Complete resilience stack testing and management",
+      "when_to_use": [
+        "System health checks",
+        "Cost optimization",
+        "Resilience validation"
+      ],
+      "when_NOT_to_use": [
+        "Production requests",
+        "Time-sensitive operations"
+      ],
+      "cost": "$0",
+      "latency": "<30s"
+    },
+    "jh_brain": {
+      "keywords": [
+        "jh",
+        "brain"
+      ],
+      "tool_id": "jh-brain",
+      "description": "Auto-discovered: Jh Brain"
+    },
+    "server": {
+      "keywords": [
+        "server"
+      ],
+      "tool_id": "server",
+      "description": "Auto-discovered: Server.Py"
+    },
+    "inbox_server": {
+      "keywords": [
+        "inbox",
+        "server"
+      ],
+      "tool_id": "inbox-server",
+      "description": "Auto-discovered: Inbox Server.Py"
+    },
+    "start_inbox_server": {
+      "keywords": [
+        "start",
+        "inbox",
+        "server"
+      ],
+      "tool_id": "start-inbox-server",
+      "description": "Auto-discovered: Start Inbox Server.Sh"
+    },
+    "mistral_gateway": {
+      "keywords": [
+        "mistral",
+        "gateway"
+      ],
+      "tool_id": "mistral-gateway",
+      "description": "Auto-discovered: Mistral Gateway"
+    },
+    "orchestrator": {
+      "keywords": [
+        "orchestrate",
+        "orchestrator",
+        "multi-agent",
+        "coordinate",
+        "level 3",
+        "dli"
+      ],
+      "tool_id": "orchestrator",
+      "description": "Level 3 Multi-Agent Orchestrator - coordinates subagents for complex queries",
+      "when_to_use": [
+        "Complex queries needing multiple sources",
+        "Transcript analysis",
+        "Research questions"
+      ],
+      "when_NOT_to_use": [
+        "Simple direct questions",
+        "Single-tool tasks"
+      ],
+      "cost": "$0.00-0.02",
+      "latency": "1-15s"
+    },
+    "guardrails": {
+      "keywords": [
+        "guardrail",
+        "security",
+        "injection",
+        "sanitize",
+        "validate",
+        "pii"
+      ],
+      "tool_id": "guardrails",
+      "description": "Input/output security filtering - prompt injection defense, PII detection",
+      "when_to_use": [
+        "Before processing untrusted input",
+        "Before outputting sensitive data"
+      ],
+      "cost": "$0.00",
+      "latency": "<10ms"
+    },
+    "a2a_protocol": {
+      "keywords": [
+        "a2a",
+        "agent to agent",
+        "delegate",
+        "discover agents",
+        "agent card"
+      ],
+      "tool_id": "a2a",
+      "description": "Agent-to-Agent protocol - discovery and task delegation between agents",
+      "when_to_use": [
+        "Need to find which agent can do something",
+        "Delegating tasks to specialist agents"
+      ],
+      "cost": "$0.00",
+      "latency": "<100ms"
+    },
+    "model_router": {
+      "keywords": [
+        "model",
+        "route",
+        "routing",
+        "flash",
+        "pro",
+        "reasoning",
+        "select model"
+      ],
+      "tool_id": "model_router",
+      "description": "Intelligent model selection - routes to optimal model based on task complexity",
+      "when_to_use": [
+        "Before making LLM calls",
+        "Optimizing cost/quality tradeoff"
+      ],
+      "cost": "$0.00",
+      "latency": "<10ms"
+    },
+    "agent_gym": {
+      "keywords": [
+        "gym",
+        "benchmark",
+        "scenario",
+        "test agent",
+        "simulation"
+      ],
+      "tool_id": "agent_gym",
+      "description": "Agent simulation environment - benchmarking and testing agents",
+      "when_to_use": [
+        "Testing agent behavior",
+        "Benchmarking performance",
+        "Adversarial testing"
+      ],
+      "cost": "varies",
+      "latency": "varies"
+    },
+    "self_evolution": {
+      "keywords": [
+        "evolution",
+        "propose tool",
+        "propose agent",
+        "level 4",
+        "self-improving"
+      ],
+      "tool_id": "self_evolution",
+      "description": "Level 4 Self-Evolution - proposes new tools/agents from patterns and needs",
+      "when_to_use": [
+        "Detecting repeated patterns",
+        "User needs unmet by existing tools"
+      ],
+      "cost": "$0.00",
+      "latency": "<1s"
+    },
+    "code_sandbox": {
+      "keywords": [
+        "sandbox",
+        "execute code",
+        "run python",
+        "docker",
+        "isolated"
+      ],
+      "tool_id": "code_sandbox",
+      "description": "Docker-based code execution sandbox - safe isolated code execution",
+      "when_to_use": [
+        "Running untrusted code",
+        "Testing code snippets",
+        "Dynamic execution"
+      ],
+      "cost": "$0.00",
+      "latency": "1-30s"
+    },
+    "telemetry": {
+      "keywords": [
+        "trace",
+        "telemetry",
+        "opentelemetry",
+        "span",
+        "observability"
+      ],
+      "tool_id": "telemetry",
+      "description": "OpenTelemetry tracing - persisted traces for agent runs",
+      "when_to_use": [
+        "Debugging agent behavior",
+        "Performance analysis",
+        "Audit trails"
+      ],
+      "cost": "$0.00",
+      "latency": "<10ms"
+    },
+    "agent_ci": {
+      "keywords": [
+        "ci",
+        "cd",
+        "eval",
+        "baseline",
+        "regression",
+        "deploy"
+      ],
+      "tool_id": "agent_ci",
+      "description": "Agent CI/CD pipeline - automated evals and deployment checks",
+      "when_to_use": [
+        "Before deploying agent changes",
+        "Checking for regressions"
+      ],
+      "cost": "varies",
+      "latency": "varies"
+    },
+    "otter_universal": {
+      "keywords": [
+        "otter",
+        "universal"
+      ],
+      "tool_id": "otter-universal",
+      "description": "Auto-discovered: Otter Universal"
+    },
+    "builder_mcp": {
+      "keywords": [
+        "builder",
+        "mcp"
+      ],
+      "tool_id": "builder-mcp",
+      "description": "Auto-discovered: Builder Mcp"
+    },
+    "project_planning": {
+      "keywords": [
+        "plan",
+        "planning",
+        "project",
+        "scope",
+        "design",
+        "architecture",
+        "solution",
+        "approach",
+        "strategy",
+        "rabbit hole",
+        "before building",
+        "collab",
+        "lfg",
+        "i have an idea"
+      ],
+      "tool_id": "project-planning-mcp",
+      "description": "Brain-first project planning - prevents rabbit holes by consulting Brain before execution",
+      "workflow": "/plan-project",
+      "port": 5170,
+      "when_to_use": [
+        "Starting a new feature or tool",
+        "Solving a complex problem",
+        "User says 'I have an idea', '[collab]', or '[LFG]'",
+        "Before building anything with high impact",
+        "When you feel like diving into implementation without a plan",
+        "Work estimated at > 1 hour"
+      ],
+      "when_NOT_to_use": [
+        "Quick bug fixes with known solutions",
+        "Simple questions that don't need planning",
+        "Tasks already covered by existing protocols",
+        "Low-impact changes (< 30 min)"
+      ],
+      "triggers_planning_for": [
+        "create_mcp",
+        "new_worker",
+        "major_refactor",
+        "new_integration"
+      ],
+      "cost": "$0.00-0.02",
+      "latency": "2-10s"
+    },
+    "mistral_unified": {
+      "keywords": [
+        "mistral",
+        "unified"
+      ],
+      "tool_id": "mistral-unified",
+      "description": "Auto-discovered: Mistral Unified"
+    },
+    "prompt_optimization": {
+      "keywords": [
+        "promptgen",
+        "prompt",
+        "optimize prompt",
+        "structured prompt",
+        "8-point",
+        "checklist",
+        "shorthand",
+        "TLDR",
+        "ELI5",
+        "BRIEFLY",
+        "token savings"
+      ],
+      "tool_id": "promptgen",
+      "description": "PromptGen 1.1 - Machine-readable prompt protocol with JSON schemas and validated outputs",
+      "when_to_use": [
+        "Complex queries needing structured planning",
+        "LLM calls that could benefit from 18-50% token savings",
+        "Tasks needing consistent output formats",
+        "Using shorthands like /TLDR, /ELI5, /BRIEFLY"
+      ],
+      "when_NOT_to_use": [
+        "Simple direct questions",
+        "Red mode (frustrated user)",
+        "One-off quick tasks"
+      ],
+      "cost": "$0.00",
+      "latency": "<100ms"
+    },
+    "inbox_router": {
+      "keywords": [
+        "inbox",
+        "router",
+        "capture",
+        "browser extension",
+        "route capture",
+        "triage",
+        "parking lot",
+        "joju pending"
+      ],
+      "tool_id": "inbox_router",
+      "description": "Routes browser extension captures to appropriate destinations (projects, library, parking lot, Joju)",
+      "when_to_use": [
+        "Processing browser extension captures",
+        "Triaging parking lot or Joju pending items",
+        "Re-routing captures manually",
+        "Viewing routing statistics"
+      ],
+      "when_NOT_to_use": [
+        "Direct file processing (use infrastructure)",
+        "Memory capture (use memory_hub)"
+      ],
+      "cost": "$0.00 (heuristics), $0.001 (LLM)",
+      "latency": "<1s"
+    }
+  },
+  "tools": {
+    "exploration_os": {
+      "name": "Exploration OS",
+      "type": "protocol",
+      "path": "8825_core/protocols/EXPLORATION_OS_PROTOCOL.md",
+      "workflow": "/explore",
+      "tier": 0
+    },
+    "export_console": {
+      "name": "Export Console",
+      "type": "http_service",
+      "path": "8825_core/tools/export_console/",
+      "port": 5050,
+      "start_command": "./start_server.sh",
+      "stop_command": "./stop_server.sh",
+      "endpoints": {
+        "status": "GET /status",
+        "render": "GET /render?path=...",
+        "export": "POST /export",
+        "cascade_export": "POST /cascade-export"
+      },
+      "cascade_export_payload": {
+        "markdown_content": "string",
+        "output_basename": "string",
+        "project_root": "string (e.g. HCSS/TGI Fridays)",
+        "template_id": "string (default: 'default')",
+        "export_type": "string (html, docx, html_and_docx)"
+      },
+      "protocol_doc": "8825_core/protocols/EXPORT_CONSOLE_PROTOCOL.md",
+      "tier": 0
+    },
+    "memory_hub": {
+      "name": "Memory Hub",
+      "type": "mcp",
+      "mcp_prefix": "mcp5_",
+      "tools": [
+        "capture_session",
+        "assimilate_memory",
+        "search_knowledge",
+        "search_unified"
+      ],
+      "tier": 0
+    },
+    "dli_router": {
+      "name": "DLI Router",
+      "type": "mcp",
+      "mcp_prefix": "mcp1_",
+      "tools": [
+        "dli_deep_dive",
+        "dli_file_retrieval",
+        "get_cost_stats"
+      ],
+      "tier": 0,
+      "promptgen_enabled": true,
+      "promptgen_param": "use_promptgen=true"
+    },
+    "promptgen": {
+      "name": "PromptGen 1.1",
+      "type": "python",
+      "path": "8825_core/promptgen/",
+      "spec": "8825_core/promptgen/PG_1_1_SPEC.md",
+      "tier": 0,
+      "description": "Machine-readable prompt protocol with JSON schemas and validated outputs",
+      "components": {
+        "shorthands": "8825_core/promptgen/shorthands.yaml",
+        "schemas": "8825_core/promptgen/schemas/",
+        "validator": "8825_core/promptgen/validator.py",
+        "loader": "8825_core/promptgen/__init__.py"
+      },
+      "shorthands": [
+        "/TLDR", "/BRIEFLY", "/ELI5", "/SWOT", "/COMPARE", "/PROS_CONS",
+        "/STEPS", "/CHECKLIST", "/OUTLINE", "/SUMMARY", "/EXTRACT_ENTITIES",
+        "/CLASSIFY", "/REWRITE", "/EXPAND", "/COMPRESS", "/TRANSLATE",
+        "/CODE_REVIEW", "/EXPLAIN_CODE"
+      ],
+      "schemas": [
+        "pkg_brief_v1.json",
+        "pkg_prompt_shorthand_v1.json",
+        "pkg_meeting_summary_v1.json",
+        "pkg_generic_v1.json"
+      ],
+      "integrations": [
+        "dli_router (use_promptgen=true)",
+        "foundry_cli (all commands)",
+        "jh_brain (guidance)"
+      ],
+      "benefits": {
+        "token_savings": "18-50%",
+        "consistency": "Validated JSON output",
+        "cost_reduction": "~$7/year at 100 queries/month"
+      }
+    },
+    "context_builder": {
+      "name": "Context Builder",
+      "type": "mcp",
+      "mcp_prefix": "mcp2_",
+      "path": "~/mcp_servers/context-builder/server.js",
+      "tools": [
+        "context_gather",
+        "context_audit",
+        "context_builder_status",
+        "context_store",
+        "context_search_similar"
+      ],
+      "tier": 0,
+      "description": "Unified context orchestrator - aggregates Memory Hub, Sentinel, DLI, and external sources",
+      "integrations": [
+        "jh_brain_get_context",
+        "deep_research_mcp",
+        "transcript_intelligence",
+        "project_planning_mcp"
+      ]
+    },
+    "mistral_gateway": {
+      "name": "Mistral Gateway",
+      "type": "mcp",
+      "mcp_prefix": "mcp13_",
+      "tools": [
+        "mistral_generate",
+        "mistral_list_profiles",
+        "mistral_budget_stats"
+      ],
+      "profiles": {
+        "general": "All-rounder for analysis, summaries, light refactors",
+        "reasoning": "Deliberate thinking: DLI triage, pattern mining, strategy",
+        "code": "Code generation, refactors, Goose/infra scripts (Codestral)",
+        "math": "Numeric reasoning, tables, metrics, ops/finance"
+      },
+      "tier": 0,
+      "promote": true,
+      "promotion_triggers": [
+        "When user asks for code generation \u2192 suggest profile=code",
+        "When user asks for reasoning/strategy \u2192 suggest profile=reasoning",
+        "When user asks for math/metrics \u2192 suggest profile=math",
+        "When DLI needs second-pass analysis \u2192 use profile=reasoning",
+        "When transcript intelligence mines opportunities \u2192 use profile=reasoning"
+      ]
+    },
+    "transcript_intelligence": {
+      "name": "Transcript Intelligence",
+      "type": "mcp",
+      "mcp_prefix": "mcp8_",
+      "tools": [
+        "ingest_transcript",
+        "extract_pain_points",
+        "mine_opportunities",
+        "generate_deck"
+      ],
+      "tier": 0
+    },
+    "ocr_mcp": {
+      "name": "OCR MCP",
+      "type": "mcp",
+      "mcp_prefix": "mcp6_",
+      "tools": [
+        "ocr_file"
+      ],
+      "tier": 0
+    },
+    "pattern_engine": {
+      "name": "Pattern Engine",
+      "type": "mcp",
+      "mcp_prefix": "mcp0_",
+      "tools": [
+        "analyze_text",
+        "extract_entities",
+        "query_index"
+      ],
+      "tier": 0
+    },
+    "hcss_bridge": {
+      "name": "HCSS Bridge",
+      "type": "mcp",
+      "mcp_prefix": "mcp3_",
+      "tools": [
+        "check_status",
+        "ingest_gmail",
+        "list_recent_files"
+      ],
+      "tier": 0
+    },
+    "infrastructure": {
+      "name": "8825 Infrastructure",
+      "type": "mcp+cli",
+      "path": "8825_core/infrastructure/",
+      "mcp_prefix": "mcp7_",
+      "mcp_tools": [
+        "infra_status",
+        "infra_queue",
+        "infra_events",
+        "infra_dead_letter",
+        "infra_scan_otter",
+        "infra_run_worker"
+      ],
+      "cli_command": "python3 cli.py",
+      "commands": {
+        "status": "python3 cli.py status",
+        "events": "python3 cli.py events [--project PROJECT] [--limit N]",
+        "queue": "python3 cli.py queue",
+        "watcher": "python3 cli.py watcher [--once]",
+        "worker": "python3 cli.py worker ingest [--once]",
+        "dead_letter": "python3 cli.py dead-letter [--clear]",
+        "daemon_start": "python3 daemon.py start [-w workers]",
+        "daemon_stop": "python3 daemon.py stop",
+        "daemon_status": "python3 daemon.py status"
+      },
+      "description": "Event-driven job queue, event log, and background workers for async 8825 work",
+      "components": {
+        "queue": "Redis/file-backed priority queue with fast/normal/slow lanes",
+        "events": "JSONL event log for all 8825 actions",
+        "watcher": "Otter Dropbox monitor with dedup and project tagging",
+        "workers": "Stateless processors: ingest, sentinel, ocr, embed, export",
+        "daemon": "Background worker management with auto-restart"
+      },
+      "integrations": [
+        "sentinel (enqueue_discovered)",
+        "hcss_bridge (transcript routing)",
+        "export_console (async exports)"
+      ],
+      "tier": 0
+    },
+    "ocr-mcp-BACKUP-20251124-0034": {
+      "name": "Ocr Mcp Backup 20251124 0034",
+      "type": "mcp",
+      "path": "8825_core/mcp_servers/ocr_mcp_BACKUP_20251124_0034",
+      "tier": 1,
+      "auto_discovered": true
+    },
+    "jh-ocr-router-mcp": {
+      "name": "Jh Ocr Router Mcp",
+      "type": "mcp",
+      "path": "8825_core/mcp_servers/jh_ocr_router_mcp",
+      "tier": 1,
+      "auto_discovered": true
+    },
+    "ocr-mcp": {
+      "name": "Ocr Mcp",
+      "type": "mcp",
+      "path": "8825_core/mcp_servers/ocr_mcp",
+      "tier": 1,
+      "auto_discovered": true
+    },
+    "integration-router-mcp": {
+      "name": "Integration Router Mcp",
+      "type": "mcp",
+      "path": "8825_core/mcp_servers/integration_router_mcp",
+      "tier": 1,
+      "auto_discovered": true
+    },
+    "jh-ocr-router-mcp-BACKUP-20251124-0034": {
+      "name": "Jh Ocr Router Mcp Backup 20251124 0034",
+      "type": "mcp",
+      "path": "8825_core/mcp_servers/jh_ocr_router_mcp_BACKUP_20251124_0034",
+      "tier": 1,
+      "auto_discovered": true
+    },
+    "ollama-bridge": {
+      "name": "Ollama Bridge",
+      "type": "mcp",
+      "path": "8825_core/mcp_servers/ollama_bridge",
+      "tools": [
+        "ollama_generate",
+        "ollama_list_models",
+        "ollama_health"
+      ],
+      "tier": 0
+    },
+    "unified_llm_client": {
+      "name": "Unified LLM Client",
+      "type": "system",
+      "path": "8825_core/system/unified_llm_client.py",
+      "tools": [
+        "unified_llm_complete",
+        "unified_llm_health",
+        "unified_llm_list_models"
+      ],
+      "tier": 0,
+      "description": "OpenRouter → Ollama fallback with cost optimization"
+    },
+    "local_search_client": {
+      "name": "Local Search Client",
+      "type": "system",
+      "path": "8825_core/system/local_search_client.py",
+      "tools": [
+        "local_search",
+        "search_health_check"
+      ],
+      "tier": 0,
+      "description": "DuckDuckGo → Tavily search fallback"
+    },
+    "local_telemetry": {
+      "name": "Local Telemetry",
+      "type": "system",
+      "path": "8825_core/system/local_telemetry.py",
+      "tools": [
+        "log_llm_call",
+        "log_search",
+        "log_error",
+        "get_telemetry_summary"
+      ],
+      "tier": 0,
+      "description": "JSON-based telemetry system"
+    },
+    "direct_file_processor": {
+      "name": "Direct File Processor",
+      "type": "system",
+      "path": "8825_core/system/direct_file_processor.py",
+      "tools": [
+        "process_emails",
+        "process_transcripts",
+        "get_file_stats"
+      ],
+      "tier": 0,
+      "description": "API-free file processing"
+    },
+    "resilience_test": {
+      "name": "Resilience Test",
+      "type": "system",
+      "path": "8825_core/system/resilience_test.py",
+      "tools": [
+        "test_all_components",
+        "validate_stack",
+        "get_resilience_status"
+      ],
+      "tier": 0,
+      "description": "Complete resilience stack validation"
+    },
+    "jh-brain": {
+      "name": "Jh Brain",
+      "type": "mcp",
+      "path": "8825_core/mcp_servers/jh_brain",
+      "tier": 1,
+      "auto_discovered": true
+    },
+    "server": {
+      "name": "Server.Py",
+      "type": "service",
+      "path": "8825_core/integrations/mcp/mcp_template/server.py",
+      "tier": 1,
+      "auto_discovered": true
+    },
+    "inbox-server": {
+      "name": "Inbox Server.Py",
+      "type": "service",
+      "path": "8825_core/mcp/inbox_server.py",
+      "tier": 1,
+      "auto_discovered": true
+    },
+    "start-inbox-server": {
+      "name": "Start Inbox Server.Sh",
+      "type": "service",
+      "path": "8825_core/mcp/start_inbox_server.sh",
+      "tier": 1,
+      "auto_discovered": true
+    },
+    "mistral-gateway": {
+      "name": "Mistral Gateway",
+      "type": "mcp",
+      "path": "8825_core/mcp_servers/mistral_gateway",
+      "tier": 1,
+      "auto_discovered": true
+    },
+    "orchestrator": {
+      "name": "Level 3 Orchestrator",
+      "type": "python",
+      "path": "8825_core/agents/orchestrator.py",
+      "tier": 0,
+      "description": "Multi-agent coordinator implementing Google Agent Blueprint Level 3",
+      "cli": "python3 orchestrator.py \"query\" --style 8825|joju|hcss --trace --json"
+    },
+    "guardrails": {
+      "name": "Agent Guardrails",
+      "type": "python",
+      "path": "8825_core/agents/guardrails.py",
+      "tier": 0,
+      "description": "Security filtering - prompt injection defense, PII detection"
+    },
+    "a2a": {
+      "name": "A2A Protocol",
+      "type": "python",
+      "path": "8825_core/agents/a2a.py",
+      "tier": 0,
+      "description": "Agent-to-Agent protocol for discovery and task delegation",
+      "cli": "python3 a2a.py discover|delegate|cards"
+    },
+    "model_router": {
+      "name": "Model Router",
+      "type": "python",
+      "path": "8825_core/agents/model_router.py",
+      "tier": 0,
+      "description": "Intelligent model selection - Flash/Standard/Pro/Reasoning tiers",
+      "cli": "python3 model_router.py route --prompt \"...\" --fast --cheap"
+    },
+    "agent_gym": {
+      "name": "Agent Gym",
+      "type": "python",
+      "path": "8825_core/agents/gym/agent_gym.py",
+      "tier": 0,
+      "description": "Simulation environment for agent testing and benchmarking",
+      "cli": "python3 agent_gym.py list|run|benchmark --scenario <id>"
+    },
+    "self_evolution": {
+      "name": "Self-Evolution Engine",
+      "type": "python",
+      "path": "8825_core/agents/evolution/self_evolution.py",
+      "tier": 0,
+      "description": "Level 4 foundation - proposes new tools/agents from patterns",
+      "cli": "python3 self_evolution.py propose-tool|propose-agent|analyze --need \"...\""
+    },
+    "code_sandbox": {
+      "name": "Code Execution Sandbox",
+      "type": "python",
+      "path": "8825_core/agents/sandbox/code_sandbox.py",
+      "tier": 0,
+      "description": "Docker-based isolated code execution"
+    },
+    "telemetry": {
+      "name": "Agent Telemetry",
+      "type": "python",
+      "path": "8825_core/agents/telemetry.py",
+      "tier": 0,
+      "description": "OpenTelemetry-style tracing with JSON persistence",
+      "cli": "python3 telemetry.py list|get --trace-id <id>"
+    },
+    "agent_ci": {
+      "name": "Agent CI/CD",
+      "type": "python",
+      "path": "8825_core/agents/ci/agent_ci.py",
+      "tier": 0,
+      "description": "Automated evals and deployment checks",
+      "cli": "python3 agent_ci.py --run-evals|--check-deploy|--update-baseline"
+    },
+    "credential_manager": {
+      "name": "Credential Manager",
+      "type": "python",
+      "path": "8825_core/system/credential_manager.py",
+      "tier": 0,
+      "description": "Per-agent credentials and budget management"
+    },
+    "otter-universal": {
+      "name": "otter-universal",
+      "type": "mcp",
+      "description": "Universal Otter transcript ingestion MCP",
+      "path": "/Users/justinharmon/Hammer Consulting Dropbox/Justin Harmon/Public/8825/8825-Jh/8825_core/mcp_servers/otter_universal/server.py",
+      "mcp_prefix": "mcp15_",
+      "added_at": "2025-12-09T03:10:56.718119",
+      "auto_captured": true
+    },
+    "builder-mcp": {
+      "name": "Builder Mcp",
+      "type": "mcp",
+      "path": "8825_core/mcp_servers/builder_mcp",
+      "tier": 1,
+      "auto_discovered": true
+    },
+    "project-planning-mcp": {
+      "name": "Project Planning MCP",
+      "type": "mcp",
+      "path": "8825_core/mcp_servers/project_planning_mcp",
+      "tier": 0,
+      "port": 5170,
+      "description": "Brain-first project planning orchestrator - prevents rabbit holes by forcing Brain consultation before execution",
+      "tools": [
+        "start_plan",
+        "consult_brain",
+        "choose_direction",
+        "add_fidelity",
+        "generate_plan",
+        "get_plan",
+        "export_plan",
+        "log_outcome",
+        "list_plans"
+      ],
+      "mcp_prefix": "mcp_plan_",
+      "spec": "8825_core/mcp_servers/specs/project_planning_mcp_spec.json",
+      "status": "active",
+      "registered_at": "2025-12-11",
+      "integrates_with": [
+        "jh-brain",
+        "memory-hub",
+        "context-builder",
+        "pattern-engine",
+        "export-mcp"
+      ]
+    },
+    "mistral-unified": {
+      "name": "Mistral Unified",
+      "type": "mcp",
+      "path": "8825_core/mcp_servers/mistral_unified",
+      "tier": 1,
+      "auto_discovered": true
+    },
+    "inbox_router": {
+      "name": "Inbox Router",
+      "type": "python",
+      "path": "8825_core/pipelines/inbox_router/",
+      "tier": 0,
+      "description": "Routes browser extension captures to projects, library, parking lot, or Joju profile",
+      "cli": "python3 -m 8825_core.pipelines.inbox_router.cli",
+      "commands": [
+        "triage parking_lot|joju_pending|library_staging",
+        "reroute <capture_id> --to <route> --target <slug>",
+        "process --file <path> | --inbox <dir>",
+        "stats",
+        "context <capture_id> --skill <skill>",
+        "approve <capture_id>",
+        "reject <capture_id> --reason <reason>"
+      ],
+      "config": "8825_core/pipelines/inbox_router/config.yaml",
+      "integrates_with": [
+        "browser_extension",
+        "memory_hub",
+        "joju_profile"
+      ]
+    },
+    "system_improvements": {
+      "name": "System Improvements",
+      "type": "python",
+      "path": "8825_core/system_improvements/",
+      "tier": 0,
+      "description": "Proof-of-value harness, observability, and ontology for all 8825 workflows",
+      "cli": "python3 -m 8825_core.system_improvements.cli",
+      "commands": [
+        "impact [workflow] [--days N]",
+        "health [workflow] [--days N]",
+        "failures [workflow] [--days N] [--limit N]",
+        "costs [workflow] [--days N]",
+        "workflows",
+        "entities [workflow]",
+        "tools <entity>",
+        "ontology [-v]"
+      ],
+      "provides": [
+        "WorkflowRun context manager",
+        "track_step decorator",
+        "Ontology registry",
+        "Impact/health/failure queries"
+      ],
+      "integrates_with": [
+        "all_workflows",
+        "jh_brain",
+        "goose"
+      ]
+    }
+  }
+}

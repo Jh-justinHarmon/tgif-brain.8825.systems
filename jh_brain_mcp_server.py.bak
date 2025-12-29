@@ -1,0 +1,1544 @@
+#!/usr/bin/env python3
+"""
+Jh Brain MCP Server - Stdio-based MCP for Windsurf/Cascade
+
+Exposes:
+- jh_brain_query: Find canonical 8825 tool for a given need
+"""
+
+import sys
+import json
+import asyncio
+from pathlib import Path
+from typing import Dict, Any, Optional
+
+# Add utils to path for user_context
+CORE_DIR = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(CORE_DIR))
+
+from utils.user_context import get_current_user_id
+
+# Load capability map
+CAPABILITY_MAP_PATH = CORE_DIR / "brain/capability_map.json"
+AGENT_REGISTRY_PATH = CORE_DIR / "agents/registry/agent_registry.json"
+AGENT_SPECS_DIR = CORE_DIR / "agents/specs"
+
+with open(CAPABILITY_MAP_PATH) as f:
+    CAPABILITY_MAP = json.load(f)
+
+
+def load_agent_registry() -> dict:
+    """Load the agent registry."""
+    if not AGENT_REGISTRY_PATH.exists():
+        return {"agents": [], "need_to_agent_map": {}}
+    with open(AGENT_REGISTRY_PATH) as f:
+        return json.load(f)
+
+
+def load_agent_spec(agent_name: str) -> dict:
+    """Load a specific agent's YAML spec."""
+    import yaml
+    spec_path = AGENT_SPECS_DIR / f"{agent_name}.yaml"
+    if not spec_path.exists():
+        return {"error": f"Agent spec not found: {agent_name}"}
+    with open(spec_path) as f:
+        return yaml.safe_load(f)
+
+
+# -------------------------------------------------------------------------
+# Agent Execution
+# -------------------------------------------------------------------------
+
+# Routing rules: patterns that should go to orchestrator vs direct tools
+ORCHESTRATOR_TRIGGERS = [
+    # (keyword_pattern, agent_name)
+    ("research", "competitive_analysis"),
+    ("compare", "competitive_analysis"),
+    ("competitive analysis", "competitive_analysis"),
+    ("analyze transcript", "transcript_intelligence"),
+    ("meeting notes", "transcript_intelligence"),
+    ("pain points", "transcript_intelligence"),
+    ("transcript", "transcript_intelligence"),
+    ("opportunities from", "transcript_intelligence"),
+    # Library Miner triggers
+    ("mine library", "library_miner"),
+    ("mine the library", "library_miner"),
+    ("find patterns", "library_miner"),
+    ("knowledge gaps", "library_miner"),
+    ("library insights", "library_miner"),
+    ("stale entries", "library_miner"),
+    ("library health", "library_miner"),
+    # Goal Tracker triggers
+    ("track goals", "goal_tracker"),
+    ("goal progress", "goal_tracker"),
+    ("find blockers", "goal_tracker"),
+    ("project health", "goal_tracker"),
+    ("progress report", "goal_tracker"),
+]
+
+DIRECT_TOOL_PATTERNS = [
+    # Fast paths - skip orchestrator
+    ("export", "export_mcp"),
+    ("search library", "memory_hub"),
+    ("capture session", "memory_hub"),
+    ("git status", "gitkraken"),
+    ("git commit", "gitkraken"),
+    ("git push", "gitkraken"),
+]
+
+
+def classify_request(text: str) -> Dict[str, Any]:
+    """
+    Classify a request as needing orchestrator (agent) or direct tool.
+    
+    Returns:
+        {
+            "route": "agent" | "direct" | "unknown",
+            "agent_name": str | None,
+            "tool_hint": str | None,
+            "confidence": float
+        }
+    """
+    text_lower = text.lower()
+    
+    # Check direct tool patterns first (fast path)
+    for pattern, tool_hint in DIRECT_TOOL_PATTERNS:
+        if pattern in text_lower:
+            return {
+                "route": "direct",
+                "agent_name": None,
+                "tool_hint": tool_hint,
+                "confidence": 0.9,
+                "matched_pattern": pattern
+            }
+    
+    # Check orchestrator triggers
+    for pattern, agent_name in ORCHESTRATOR_TRIGGERS:
+        if pattern in text_lower:
+            return {
+                "route": "agent",
+                "agent_name": agent_name,
+                "tool_hint": None,
+                "confidence": 0.85,
+                "matched_pattern": pattern
+            }
+    
+    # Unknown - let caller decide
+    return {
+        "route": "unknown",
+        "agent_name": None,
+        "tool_hint": None,
+        "confidence": 0.0
+    }
+
+
+async def run_agent(
+    agent_name: str, 
+    inputs: Dict[str, Any],
+    user_id: str = "local",
+    tier: str = "alpha",
+    skip_budget_check: bool = False,
+    use_cache: bool = True,
+) -> Dict[str, Any]:
+    """
+    Run a named agent via agent_loop.
+    
+    Args:
+        agent_name: Name of the agent (e.g., 'transcript_intelligence', 'competitive_analysis')
+        inputs: Input parameters for the agent
+        user_id: User identifier for budget tracking
+        tier: User tier for budget limits (alpha, beta, free)
+        skip_budget_check: If True, skip budget validation
+        use_cache: If True, check cache before running and cache results
+    
+    Returns:
+        AgentRun result as dict
+    """
+    # Import here to avoid circular imports
+    agents_dir = Path(__file__).parent.parent.parent / "agents"
+    tools_dir = Path(__file__).parent.parent.parent / "tools"
+    sys.path.insert(0, str(agents_dir))
+    sys.path.insert(0, str(tools_dir))
+    
+    try:
+        from agent_loop import AgentExecutor, load_agent_spec
+        from agent_cache import get_cached_result, cache_result
+        from usage_dashboard import check_budget, get_agent_cost_estimate, log_usage
+        
+        # Validate agent exists
+        spec = load_agent_spec(agent_name)
+        if "error" in spec:
+            return {
+                "success": False,
+                "error": spec["error"],
+                "agent_name": agent_name
+            }
+        
+        # Check cache first
+        if use_cache:
+            cached = get_cached_result(agent_name, inputs)
+            if cached:
+                print(f"Cache hit for {agent_name}", file=sys.stderr)
+                return cached
+        
+        # Check budget before running
+        if not skip_budget_check:
+            preset = inputs.get("preset", "default")
+            estimated_cost = get_agent_cost_estimate(agent_name, preset)
+            budget = check_budget(user_id, tier, estimated_cost)
+            
+            if not budget["allowed"]:
+                return {
+                    "success": False,
+                    "error": f"Budget exceeded: {budget['warning']}",
+                    "agent_name": agent_name,
+                    "budget": budget
+                }
+            
+            # Include budget warning if present
+            budget_warning = budget.get("warning")
+        else:
+            budget_warning = None
+            estimated_cost = 0
+        
+        # Create executor and run
+        executor = AgentExecutor()
+        run = await executor.execute(agent_name, inputs)
+        
+        actual_cost = run.cost_usd if run.cost_usd > 0 else estimated_cost * 0.5
+        
+        # Log usage after completion
+        try:
+            log_usage(
+                model=f"agent:{agent_name}",
+                input_tokens=0,  # Agents don't track tokens directly
+                output_tokens=0,
+                cost_usd=actual_cost,
+                latency_ms=0,  # Could calculate from timestamps
+                source_tool=f"agent:{agent_name}",
+                success=run.status.value == "completed",
+                user_id=user_id,
+                request_id=run.run_id,
+            )
+        except Exception as log_error:
+            print(f"Warning: Failed to log usage: {log_error}", file=sys.stderr)
+        
+        # Convert to dict for JSON serialization
+        result = run.to_dict()
+        result["success"] = run.status.value == "completed"
+        
+        if budget_warning:
+            result["budget_warning"] = budget_warning
+        
+        # Cache successful results
+        if use_cache and result["success"]:
+            try:
+                cache_result(agent_name, inputs, result, cost_usd=actual_cost)
+                result["cached"] = True
+            except Exception as cache_error:
+                print(f"Warning: Failed to cache result: {cache_error}", file=sys.stderr)
+        
+        return result
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "agent_name": agent_name,
+            "inputs": inputs
+        }
+    finally:
+        # Clean up sys.path
+        if str(agents_dir) in sys.path:
+            sys.path.remove(str(agents_dir))
+        if str(tools_dir) in sys.path:
+            sys.path.remove(str(tools_dir))
+
+
+def find_agent_for_need(need: str) -> dict:
+    """Find the best agent for a given need."""
+    registry = load_agent_registry()
+    need_lower = need.lower()
+    
+    # Direct match in need_to_agent_map
+    need_map = registry.get("need_to_agent_map", {})
+    if need_lower in need_map:
+        agent_name = need_map[need_lower]
+        for agent in registry.get("agents", []):
+            if agent.get("name") == agent_name:
+                return {
+                    "agent": agent,
+                    "confidence": "high",
+                    "method": "direct_match"
+                }
+    
+    # Fuzzy match
+    for key, agent_name in need_map.items():
+        if key in need_lower or need_lower in key:
+            for agent in registry.get("agents", []):
+                if agent.get("name") == agent_name:
+                    return {
+                        "agent": agent,
+                        "confidence": "medium",
+                        "method": "fuzzy_match",
+                        "matched_key": key
+                    }
+    
+    # Tag-based match
+    for agent in registry.get("agents", []):
+        tags = agent.get("tags", [])
+        for tag in tags:
+            if tag.lower() in need_lower:
+                return {
+                    "agent": agent,
+                    "confidence": "low",
+                    "method": "tag_match",
+                    "matched_tag": tag
+                }
+    
+    return {"error": "No agent found for this need"}
+
+
+def find_tool_for_need(need: str, use_dli: bool = True) -> dict:
+    """
+    Map a need to the canonical tool.
+    
+    Uses DLI + Pattern Engine for smart matching, falls back to keywords.
+    Applies learned weights to rank multiple matches.
+    Actively promotes Mistral specialists when appropriate.
+    """
+    # Check for Mistral specialist match first (promoted)
+    try:
+        from preflight import detect_mistral_profile
+        mistral_profile = detect_mistral_profile(need)
+        if mistral_profile:
+            mistral_cap = f"mistral_{mistral_profile}"
+            if mistral_cap in CAPABILITY_MAP['capabilities']:
+                cap_info = CAPABILITY_MAP['capabilities'][mistral_cap]
+                tool_info = CAPABILITY_MAP['tools'].get(cap_info['tool_id'], {})
+                return {
+                    'match': {
+                        'capability': mistral_cap,
+                        'description': cap_info['description'],
+                        'tool_id': cap_info['tool_id'],
+                        'profile': cap_info.get('profile', mistral_profile)
+                    },
+                    'tool': tool_info,
+                    'confidence': 'high',
+                    'method': 'mistral_specialist',
+                    'mistral_profile': mistral_profile,
+                    'suggestion': f"Use mcp13_mistral_generate with profile='{mistral_profile}'"
+                }
+    except Exception:
+        pass
+    
+    # Try DLI first for semantic matching
+    if use_dli:
+        try:
+            dli_result = query_dli_for_tool(need)
+            if dli_result and not dli_result.get('error'):
+                return dli_result
+        except Exception as e:
+            print(f"DLI lookup failed, using keywords: {e}", file=sys.stderr)
+    
+    # Fallback to keyword matching - collect ALL matches
+    need_lower = need.lower()
+    matches = []
+    
+    for cap_id, cap_info in CAPABILITY_MAP['capabilities'].items():
+        score = sum(1 for kw in cap_info['keywords'] if kw.lower() in need_lower)
+        
+        if score > 0:
+            matches.append({
+                'capability': cap_id,
+                'description': cap_info['description'],
+                'tool_id': cap_info['tool_id'],
+                'keyword_score': score
+            })
+    
+    if not matches:
+        return {'error': 'No tool found for this need'}
+    
+    # Apply learned weights to rank matches
+    try:
+        from session_state import get_weighted_tool_ranking
+        tool_ids = [m['tool_id'] for m in matches]
+        ranked = get_weighted_tool_ranking(tool_ids)
+        
+        # Create tool_id -> weight map
+        weight_map = {r['tool_id']: r['weight'] * r['success_rate'] for r in ranked}
+        
+        # Sort matches by combined score (keyword_score * learned_weight)
+        for m in matches:
+            m['learned_weight'] = weight_map.get(m['tool_id'], 0.5)
+            m['combined_score'] = m['keyword_score'] * (1 + m['learned_weight'])
+        
+        matches.sort(key=lambda x: x['combined_score'], reverse=True)
+    except Exception:
+        # If weighting fails, just use keyword score
+        matches.sort(key=lambda x: x['keyword_score'], reverse=True)
+    
+    best_match = matches[0]
+    tool_info = CAPABILITY_MAP['tools'][best_match['tool_id']]
+    
+    return {
+        'match': {
+            'capability': best_match['capability'],
+            'description': best_match['description'],
+            'tool_id': best_match['tool_id']
+        },
+        'tool': tool_info,
+        'confidence': 'high' if best_match['keyword_score'] >= 2 else 'medium',
+        'method': 'keyword_weighted',
+        'alternatives': [m['tool_id'] for m in matches[1:3]] if len(matches) > 1 else []
+    }
+
+
+def query_dli_for_tool(need: str) -> dict:
+    """
+    Use DLI + Pattern Engine for smart tool matching.
+    
+    1. Pattern Engine extracts intents/entities
+    2. Maps to capabilities
+    3. Returns best match with confidence
+    """
+    # Add pattern engine path
+    pattern_engine_path = Path(__file__).parent.parent.parent / "testing/ai_comparison_test"
+    sys.path.insert(0, str(pattern_engine_path))
+    
+    try:
+        from pattern_engine import PatternEngine
+        
+        pe = PatternEngine()
+        
+        # Analyze the need
+        analysis = pe.analyze(need)
+        
+        # Extract intents
+        intents = analysis.get('intents', {})
+        
+        # Map intents to capabilities
+        intent_to_cap = {
+            'export': ['export_docx', 'export_html', 'export_markdown'],
+            'capture': ['capture_session', 'assimilate_memory'],
+            'search': ['search_knowledge', 'deep_dive'],
+            'analyze': ['deep_dive'],
+            'ocr': ['ocr_file'],
+            'transcribe': ['ingest_transcript'],
+            'parseable': ['export_docx'],  # Structured output → export
+        }
+        
+        # Check for matching intents
+        for intent_key, is_present in intents.items():
+            if is_present and intent_key in intent_to_cap:
+                for cap_id in intent_to_cap[intent_key]:
+                    if cap_id in CAPABILITY_MAP['capabilities']:
+                        cap_info = CAPABILITY_MAP['capabilities'][cap_id]
+                        tool_info = CAPABILITY_MAP['tools'][cap_info['tool_id']]
+                        return {
+                            'match': {
+                                'capability': cap_id,
+                                'description': cap_info['description'],
+                                'tool_id': cap_info['tool_id']
+                            },
+                            'tool': tool_info,
+                            'confidence': 'high',
+                            'method': 'pattern_engine',
+                            'intents_detected': [k for k, v in intents.items() if v]
+                        }
+        
+        # Also check entities for tool references
+        entities = analysis.get('entities', [])
+        for entity in entities:
+            if entity.get('type') == 'skill':
+                skill = entity.get('value', '').lower()
+                # Check if skill matches a tool
+                for tool_id in CAPABILITY_MAP['tools']:
+                    if skill in tool_id or tool_id in skill:
+                        tool_info = CAPABILITY_MAP['tools'][tool_id]
+                        # Find capability for this tool
+                        for cap_id, cap_info in CAPABILITY_MAP['capabilities'].items():
+                            if cap_info['tool_id'] == tool_id:
+                                return {
+                                    'match': {
+                                        'capability': cap_id,
+                                        'description': cap_info['description'],
+                                        'tool_id': tool_id
+                                    },
+                                    'tool': tool_info,
+                                    'confidence': 'medium',
+                                    'method': 'pattern_engine_entity',
+                                    'entity_matched': entity
+                                }
+        
+        return None
+        
+    except Exception as e:
+        print(f"Pattern Engine query failed: {e}", file=sys.stderr)
+        return None
+
+
+def run_auto_ingest(execute: bool = False) -> dict:
+    """Run auto-ingestion to discover new tools."""
+    from auto_ingest import run_ingestion
+    discovered = run_ingestion(dry_run=not execute)
+    return {
+        "discovered": len(discovered),
+        "tools": [t["tool_id"] for t in discovered],
+        "executed": execute
+    }
+
+
+def get_context_from_dli(topic: str, focus: str = "global") -> dict:
+    """
+    Get context on a topic using Context Builder (primary) with DLI fallback.
+    Context Builder aggregates: Memory Hub, Sentinel, DLI, and optionally external.
+    """
+    import subprocess
+    
+    # Try Context Builder first (aggregates all internal sources)
+    try:
+        context_builder_script = '''
+import sys
+sys.path.insert(0, "/Users/justinharmon/mcp_servers/context-builder")
+import json
+import httpx
+import asyncio
+
+async def gather_context(query, focus):
+    # Call Context Builder MCP via subprocess (stdio)
+    import subprocess
+    
+    proc = subprocess.Popen(
+        ["node", "/Users/justinharmon/mcp_servers/context-builder/server.js"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE
+    )
+    
+    # Send initialize
+    init_req = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {}
+    }) + "\\n"
+    
+    # Send context_gather
+    gather_req = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "context_gather",
+            "arguments": {
+                "query": query,
+                "max_entries": 15,
+                "max_tokens": 4096,
+                "include_external": False
+            }
+        }
+    }) + "\\n"
+    
+    stdout, stderr = proc.communicate(input=(init_req + gather_req).encode(), timeout=30)
+    
+    # Parse response
+    for line in stdout.decode().strip().split("\\n"):
+        if line.startswith("{"):
+            try:
+                resp = json.loads(line)
+                if resp.get("id") == 2 and "result" in resp:
+                    content = resp["result"].get("content", [])
+                    if content:
+                        return json.loads(content[0].get("text", "{}"))
+            except:
+                pass
+    
+    return None
+
+result = asyncio.run(gather_context("''' + topic + '''", "''' + focus + '''"))
+print(json.dumps(result) if result else json.dumps({"error": "No result"}))
+'''
+        
+        proc = subprocess.run(
+            ["python3", "-c", context_builder_script],
+            capture_output=True,
+            text=True,
+            timeout=35
+        )
+        
+        if proc.returncode == 0 and proc.stdout.strip():
+            cb_result = json.loads(proc.stdout.strip())
+            if cb_result and not cb_result.get("error"):
+                return {
+                    "topic": topic,
+                    "focus": focus,
+                    "source": "context_builder",
+                    "context": cb_result.get("rankedContext", ""),
+                    "confidence": cb_result.get("merged", {}).get("confidence", 0),
+                    "sources": cb_result.get("merged", {}).get("sources", []),
+                    "entry_count": cb_result.get("merged", {}).get("entryCount", 0),
+                    "latency_ms": cb_result.get("latencyMs", 0),
+                    "cost": "$0.00"  # Internal sources are free
+                }
+    except Exception as e:
+        print(f"Context Builder failed, falling back to DLI: {e}", file=sys.stderr)
+    
+    # Fallback to DLI directly
+    import asyncio
+    dli_path = Path(__file__).parent.parent.parent / "intelligence/dli_router_mcp"
+    sys.path.insert(0, str(dli_path))
+    
+    try:
+        from dli_router import DLIRouter
+        from telemetry import DLITelemetry
+        
+        telemetry = DLITelemetry()
+        router = DLIRouter(telemetry)
+        
+        query = f"Provide context on {topic}"
+        if focus != "global":
+            query += f" for focus area {focus}"
+        
+        task = {'type': 'deep_dive', 'content': query}
+        result = asyncio.run(router.route(task, mode='pattern', use_promptgen=False))
+        
+        return {
+            "topic": topic,
+            "focus": focus,
+            "source": "dli_fallback",
+            "context": result['result'],
+            "cost": f"${result['cost']:.4f}",
+            "tokens": result['tokens_total'],
+            "model": result['model']
+        }
+        
+    except Exception as e:
+        return {
+            "error": f"Failed to get context: {str(e)}",
+            "topic": topic,
+            "focus": focus
+        }
+
+
+def handle_request(request: dict) -> dict:
+    """Handle MCP JSON-RPC request."""
+    method = request.get("method")
+    params = request.get("params", {})
+    request_id = request.get("id")
+    
+    try:
+        if method == "initialize":
+            result = {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {
+                    "name": "jh-brain",
+                    "version": "1.0.0"
+                }
+            }
+        elif method == "initialized":
+            return None  # Notification, no response
+        elif method == "tools/list":
+            result = {
+                "tools": [
+                    {
+                        "name": "jh_brain_query",
+                        "description": "Query Jh Brain for the canonical 8825 tool matching a need. ALWAYS call this before searching the codebase for internal tools.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "need": {
+                                    "type": "string",
+                                    "description": "What you need to do (e.g., 'export docx', 'capture session', 'ingest transcript')"
+                                }
+                            },
+                            "required": ["need"]
+                        }
+                    },
+                    {
+                        "name": "jh_brain_ingest",
+                        "description": "Scan for new tools and add them to Jh Brain. Use execute=true to actually update.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "execute": {
+                                    "type": "boolean",
+                                    "description": "If true, actually update capability_map.json. Default false (dry run).",
+                                    "default": False
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "name": "jh_brain_log_use",
+                        "description": "Log tool usage for learning. Call after using a tool to track success/failure.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "tool_id": {
+                                    "type": "string",
+                                    "description": "The tool that was used (e.g., 'export_console')"
+                                },
+                                "need": {
+                                    "type": "string",
+                                    "description": "What the user needed"
+                                },
+                                "success": {
+                                    "type": "boolean",
+                                    "description": "Whether the tool worked",
+                                    "default": True
+                                },
+                                "notes": {
+                                    "type": "string",
+                                    "description": "Optional notes about the usage"
+                                },
+                                "user_id": {
+                                    "type": "string",
+                                    "description": "User ID for multi-user attribution. Defaults to current user."
+                                }
+                            },
+                            "required": ["tool_id", "need"]
+                        }
+                    },
+                    {
+                        "name": "jh_brain_stats",
+                        "description": "Get Jh Brain usage statistics and learning weights.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {}
+                        }
+                    },
+                    {
+                        "name": "jh_brain_preflight",
+                        "description": "Analyze a user request and get context injection. Returns relevant tools if this is an 8825 internal request.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "text": {
+                                    "type": "string",
+                                    "description": "The user's request text to analyze"
+                                }
+                            },
+                            "required": ["text"]
+                        }
+                    },
+                    {
+                        "name": "jh_brain_guidance",
+                        "description": "Get philosophy-based guidance for a task. Applies core 8825/HCSS principles to determine approach.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "task_type": {
+                                    "type": "string",
+                                    "description": "Type of task (export, capture, analyze, build, etc.)"
+                                },
+                                "request": {
+                                    "type": "string",
+                                    "description": "The user's request text"
+                                },
+                                "confidence": {
+                                    "type": "number",
+                                    "description": "Your confidence level (0.0-1.0)",
+                                    "default": 0.7
+                                },
+                                "impact": {
+                                    "type": "string",
+                                    "enum": ["low", "medium", "high"],
+                                    "description": "Impact level of the change",
+                                    "default": "low"
+                                }
+                            },
+                            "required": ["task_type", "request"]
+                        }
+                    },
+                    {
+                        "name": "jh_brain_resume",
+                        "description": "Get session context from previous sessions. Call at start of new session to resume context.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {}
+                        }
+                    },
+                    {
+                        "name": "jh_brain_rank_tools",
+                        "description": "Rank tools by learned success rates. Use when multiple tools could work.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "tool_ids": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "List of tool IDs to rank"
+                                }
+                            },
+                            "required": ["tool_ids"]
+                        }
+                    },
+                    {
+                        "name": "jh_brain_get_context",
+                        "description": "Get context on any topic from 8825's knowledge base via DLI deep dive. Use this to learn about HCSS, Joju, past decisions, or any 8825 domain knowledge.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "topic": {
+                                    "type": "string",
+                                    "description": "The topic to get context on (e.g., 'HCSS open projects', 'Joju architecture', 'recent decisions')"
+                                },
+                                "focus": {
+                                    "type": "string",
+                                    "enum": ["global", "hcss", "joju", "jh_personal"],
+                                    "description": "Focus area to scope the context (default: global)",
+                                    "default": "global"
+                                }
+                            },
+                            "required": ["topic"]
+                        }
+                    },
+                    {
+                        "name": "jh_brain_list_agents",
+                        "description": "List all registered 8825 agents with their levels and purposes.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {}
+                        }
+                    },
+                    {
+                        "name": "jh_brain_get_agent",
+                        "description": "Get full specification for a named agent. Returns inputs, outputs, tools, orchestration pattern, and metrics.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "agent_name": {
+                                    "type": "string",
+                                    "description": "Name of the agent (e.g., 'transcript_intelligence', 'competitive_analysis')"
+                                }
+                            },
+                            "required": ["agent_name"]
+                        }
+                    },
+                    {
+                        "name": "jh_brain_find_agent",
+                        "description": "Find the best agent for a given need. Use when you need to run a multi-step workflow.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "need": {
+                                    "type": "string",
+                                    "description": "What you need to accomplish (e.g., 'analyze a transcript', 'research a company')"
+                                }
+                            },
+                            "required": ["need"]
+                        }
+                    },
+                    {
+                        "name": "jh_brain_run_agent",
+                        "description": "Run a named agent (multi-step workflow). Use this for complex tasks like competitive analysis or transcript intelligence. The agent will orchestrate multiple tools automatically.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "agent_name": {
+                                    "type": "string",
+                                    "description": "Name of the agent to run (e.g., 'transcript_intelligence', 'competitive_analysis')"
+                                },
+                                "inputs": {
+                                    "type": "object",
+                                    "description": "Input parameters for the agent. Check jh_brain_get_agent for required inputs."
+                                }
+                            },
+                            "required": ["agent_name", "inputs"]
+                        }
+                    },
+                    {
+                        "name": "jh_brain_classify_request",
+                        "description": "Classify a user request to determine if it should use an agent (orchestrator) or a direct tool. Returns routing recommendation.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "text": {
+                                    "type": "string",
+                                    "description": "The user's request text to classify"
+                                }
+                            },
+                            "required": ["text"]
+                        }
+                    },
+                    {
+                        "name": "jh_brain_check_budget",
+                        "description": "Check remaining budget before running an agent. Returns daily/monthly usage and limits.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "agent_name": {
+                                    "type": "string",
+                                    "description": "Optional: Agent name to estimate cost for"
+                                },
+                                "preset": {
+                                    "type": "string",
+                                    "description": "Optional: Preset for cost estimation (e.g., 'fast', 'balanced', 'deep')"
+                                },
+                                "user_id": {
+                                    "type": "string",
+                                    "description": "User ID (default: 'local')",
+                                    "default": "local"
+                                },
+                                "tier": {
+                                    "type": "string",
+                                    "enum": ["alpha", "beta", "free"],
+                                    "description": "User tier for limits (default: 'alpha')",
+                                    "default": "alpha"
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "name": "jh_brain_agent_activity",
+                        "description": "Get agent activity dashboard showing runs, success rates, and costs per agent.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "days": {
+                                    "type": "integer",
+                                    "description": "Number of days to look back (default: 7)",
+                                    "default": 7
+                                },
+                                "user_id": {
+                                    "type": "string",
+                                    "description": "User ID (default: 'local')",
+                                    "default": "local"
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "name": "jh_brain_cache_stats",
+                        "description": "Get agent cache statistics: entries, hit rates, and cost savings.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "cleanup": {
+                                    "type": "boolean",
+                                    "description": "If true, also clean up expired entries"
+                                }
+                            }
+                        }
+                    }
+                ]
+            }
+        elif method == "tools/call":
+            tool_name = params.get("name")
+            tool_args = params.get("arguments", {})
+            
+            if tool_name == "jh_brain_query":
+                need = tool_args.get("need", "")
+                if not need:
+                    raise ValueError("Need is required")
+                
+                query_result = find_tool_for_need(need)
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(query_result, indent=2)
+                        }
+                    ]
+                }
+            elif tool_name == "jh_brain_ingest":
+                execute = tool_args.get("execute", False)
+                ingest_result = run_auto_ingest(execute=execute)
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(ingest_result, indent=2)
+                        }
+                    ]
+                }
+            elif tool_name == "jh_brain_log_use":
+                from session_state import log_tool_use, get_or_create_session
+                session_id = get_or_create_session()
+                user_id = get_current_user_id(tool_args.get("user_id"))
+                log_tool_use(
+                    session_id=session_id,
+                    tool_id=tool_args.get("tool_id", ""),
+                    need=tool_args.get("need", ""),
+                    success=tool_args.get("success", True),
+                    notes=tool_args.get("notes", ""),
+                    user_id=user_id
+                )
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps({"logged": True, "session_id": session_id, "user_id": user_id}, indent=2)
+                        }
+                    ]
+                }
+            elif tool_name == "jh_brain_stats":
+                from session_state import get_session_stats
+                stats = get_session_stats()
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(stats, indent=2)
+                        }
+                    ]
+                }
+            elif tool_name == "jh_brain_preflight":
+                from preflight import get_context_injection, format_injection
+                text = tool_args.get("text", "")
+                context = get_context_injection(text)
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps({
+                                "context": context,
+                                "formatted": format_injection(context) if context else None
+                            }, indent=2)
+                        }
+                    ]
+                }
+            elif tool_name == "jh_brain_guidance":
+                from philosophy import (
+                    apply_scope_discipline, 
+                    apply_decision_matrix, 
+                    get_guidance_for_task,
+                    get_all_philosophies
+                )
+                
+                task_type = tool_args.get("task_type", "")
+                request = tool_args.get("request", "")
+                confidence = tool_args.get("confidence", 0.7)
+                impact = tool_args.get("impact", "low")
+                
+                guidance = {
+                    "task_guidance": get_guidance_for_task(task_type, need=request),
+                    "scope_discipline": apply_scope_discipline(request, impact),
+                    "decision_matrix": apply_decision_matrix(confidence),
+                    "core_philosophies": list(get_all_philosophies().keys())
+                }
+                
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(guidance, indent=2)
+                        }
+                    ]
+                }
+            elif tool_name == "jh_brain_resume":
+                from session_state import get_session_summary, format_session_resume
+                
+                summary = get_session_summary()
+                formatted = format_session_resume()
+                
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps({
+                                "summary": summary,
+                                "formatted": formatted
+                            }, indent=2)
+                        }
+                    ]
+                }
+            elif tool_name == "jh_brain_rank_tools":
+                from session_state import get_weighted_tool_ranking
+                
+                tool_ids = tool_args.get("tool_ids", [])
+                ranked = get_weighted_tool_ranking(tool_ids)
+                
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps({
+                                "ranked_tools": ranked,
+                                "recommendation": ranked[0]["tool_id"] if ranked else None
+                            }, indent=2)
+                        }
+                    ]
+                }
+            elif tool_name == "jh_brain_get_context":
+                topic = tool_args.get("topic", "")
+                focus = tool_args.get("focus", "global")
+                
+                if not topic:
+                    raise ValueError("Topic is required")
+                
+                context_result = get_context_from_dli(topic, focus)
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(context_result, indent=2)
+                        }
+                    ]
+                }
+            elif tool_name == "jh_brain_list_agents":
+                registry = load_agent_registry()
+                agents = registry.get("agents", [])
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps({
+                                "agents": agents,
+                                "count": len(agents)
+                            }, indent=2)
+                        }
+                    ]
+                }
+            elif tool_name == "jh_brain_get_agent":
+                agent_name = tool_args.get("agent_name", "")
+                if not agent_name:
+                    raise ValueError("agent_name is required")
+                
+                spec = load_agent_spec(agent_name)
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(spec, indent=2, default=str)
+                        }
+                    ]
+                }
+            elif tool_name == "jh_brain_find_agent":
+                need = tool_args.get("need", "")
+                if not need:
+                    raise ValueError("need is required")
+                
+                agent_result = find_agent_for_need(need)
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(agent_result, indent=2)
+                        }
+                    ]
+                }
+            elif tool_name == "jh_brain_run_agent":
+                agent_name = tool_args.get("agent_name", "")
+                inputs = tool_args.get("inputs", {})
+                
+                if not agent_name:
+                    raise ValueError("agent_name is required")
+                
+                # Run the agent asynchronously
+                agent_result = asyncio.run(run_agent(agent_name, inputs))
+                
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(agent_result, indent=2, default=str)
+                        }
+                    ]
+                }
+            elif tool_name == "jh_brain_classify_request":
+                text = tool_args.get("text", "")
+                if not text:
+                    raise ValueError("text is required")
+                
+                classification = classify_request(text)
+                
+                # Add suggestion based on classification
+                if classification["route"] == "agent":
+                    classification["suggestion"] = f"Use jh_brain_run_agent with agent_name='{classification['agent_name']}'"
+                elif classification["route"] == "direct":
+                    classification["suggestion"] = f"Use direct tool: {classification['tool_hint']}"
+                else:
+                    classification["suggestion"] = "Use jh_brain_query to find the right tool"
+                
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(classification, indent=2)
+                        }
+                    ]
+                }
+            elif tool_name == "jh_brain_check_budget":
+                # Import usage dashboard
+                tools_dir = Path(__file__).parent.parent.parent / "tools"
+                sys.path.insert(0, str(tools_dir))
+                try:
+                    from usage_dashboard import check_budget, get_agent_cost_estimate
+                    
+                    user_id = tool_args.get("user_id", "local")
+                    tier = tool_args.get("tier", "alpha")
+                    agent_name = tool_args.get("agent_name")
+                    preset = tool_args.get("preset", "default")
+                    
+                    # Get estimated cost if agent specified
+                    estimated_cost = 0.0
+                    if agent_name:
+                        estimated_cost = get_agent_cost_estimate(agent_name, preset)
+                    
+                    budget = check_budget(user_id, tier, estimated_cost)
+                    
+                    if agent_name:
+                        budget["agent_name"] = agent_name
+                        budget["estimated_cost"] = estimated_cost
+                        budget["preset"] = preset
+                    
+                    result = {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(budget, indent=2)
+                            }
+                        ]
+                    }
+                finally:
+                    if str(tools_dir) in sys.path:
+                        sys.path.remove(str(tools_dir))
+            elif tool_name == "jh_brain_agent_activity":
+                # Import usage dashboard
+                tools_dir = Path(__file__).parent.parent.parent / "tools"
+                sys.path.insert(0, str(tools_dir))
+                try:
+                    from usage_dashboard import get_agent_activity
+                    
+                    days = tool_args.get("days", 7)
+                    user_id = tool_args.get("user_id", "local")
+                    
+                    activity = get_agent_activity(days, user_id)
+                    
+                    result = {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(activity, indent=2)
+                            }
+                        ]
+                    }
+                finally:
+                    if str(tools_dir) in sys.path:
+                        sys.path.remove(str(tools_dir))
+            elif tool_name == "jh_brain_cache_stats":
+                # Import agent cache
+                agents_dir = Path(__file__).parent.parent.parent / "agents"
+                sys.path.insert(0, str(agents_dir))
+                try:
+                    from agent_cache import get_cache_stats, cleanup_expired
+                    
+                    cleanup = tool_args.get("cleanup", False)
+                    
+                    if cleanup:
+                        expired_count = cleanup_expired()
+                    else:
+                        expired_count = 0
+                    
+                    stats = get_cache_stats()
+                    
+                    if cleanup:
+                        stats["expired_cleaned"] = expired_count
+                    
+                    result = {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(stats, indent=2)
+                            }
+                        ]
+                    }
+                finally:
+                    if str(agents_dir) in sys.path:
+                        sys.path.remove(str(agents_dir))
+            else:
+                raise ValueError(f"Unknown tool: {tool_name}")
+        else:
+            result = {"error": f"Unknown method: {method}"}
+        
+        if result is None:
+            return None
+        
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": result
+        }
+    
+    except Exception as e:
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {
+                "code": -32603,
+                "message": str(e)
+            }
+        }
+
+
+def main():
+    """Main MCP server loop - reads from stdin, writes to stdout."""
+    print("✅ Jh Brain MCP initialized", file=sys.stderr)
+    
+    for line in sys.stdin:
+        try:
+            request = json.loads(line)
+            response = handle_request(request)
+            if response is not None:
+                print(json.dumps(response), flush=True)
+        except Exception as e:
+            print(f"❌ Error: {e}", file=sys.stderr)
+            error_response = {
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32700,
+                    "message": f"Parse error: {str(e)}"
+                }
+            }
+            print(json.dumps(error_response), flush=True)
+
+
+def comprehensive_search(query: str, focus: str = "global") -> dict:
+    """
+    Multi-tool search EXACTLY like Windsurf does.
+    Calls the SAME tools in the SAME order:
+    1. memory_search (Memory Core)
+    2. search_knowledge (Memory Hub)
+    3. search_unified (Memory Hub)
+    4. context_gather (Context Builder)
+    """
+    import subprocess
+    
+    results = {
+        "query": query,
+        "focus": focus,
+        "entries": [],
+        "sources": [],
+        "tools_called": [],
+        "confidence": 0
+    }
+    
+    # 1. Memory Core - memory_search
+    try:
+        memory_core_path = Path.home() / "mcp_servers" / "memory-core"
+        search_script = f'''
+import sys
+sys.path.insert(0, "{memory_core_path}")
+import json
+from memory_store import MemoryStore
+
+store = MemoryStore()
+results = store.search("{query}", limit=10)
+print(json.dumps([r.__dict__ if hasattr(r, '__dict__') else r for r in results]))
+'''
+        proc = subprocess.run(["python3", "-c", search_script], capture_output=True, text=True, timeout=10)
+        if proc.returncode == 0 and proc.stdout.strip():
+            try:
+                mem_results = json.loads(proc.stdout.strip())
+                if mem_results:
+                    for r in mem_results[:5]:
+                        results["entries"].append({
+                            "id": r.get("entry_id", r.get("id", "")),
+                            "type": r.get("entry_type", "memory"),
+                            "title": r.get("title", "")[:100],
+                            "content": r.get("content", "")[:500],
+                            "tags": r.get("tags", []),
+                            "source": "memory_core"
+                        })
+                    results["sources"].append("memory_core")
+                    results["tools_called"].append("memory_search")
+            except:
+                pass
+    except Exception as e:
+        print(f"Memory Core search failed: {e}", file=sys.stderr)
+    
+    # 2. Memory Hub - search_knowledge
+    try:
+        memory_hub_path = Path.home() / "mcp_servers" / "memory-hub"
+        search_script = f'''
+import sys
+sys.path.insert(0, "{memory_hub_path}")
+import json
+from library_manager import LibraryManager
+
+lm = LibraryManager()
+results = lm.search("{query}", limit=10)
+print(json.dumps(results))
+'''
+        proc = subprocess.run(["python3", "-c", search_script], capture_output=True, text=True, timeout=10)
+        if proc.returncode == 0 and proc.stdout.strip():
+            lib_results = json.loads(proc.stdout.strip())
+            if lib_results:
+                seen_ids = {e.get("id") for e in results["entries"]}
+                for r in lib_results[:5]:
+                    if r.get("id") not in seen_ids:
+                        r["source"] = "memory_hub"
+                        results["entries"].append(r)
+                        seen_ids.add(r.get("id"))
+                results["sources"].append("memory_hub")
+                results["tools_called"].append("search_knowledge")
+    except Exception as e:
+        print(f"Memory Hub search failed: {e}", file=sys.stderr)
+    
+    # 2. Search iCloud Library JSON files directly (backup)
+    try:
+        library_path = Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs" / "8825" / "Library" / "entries"
+        if library_path.exists():
+            search_terms = [t.lower() for t in query.split() if len(t) > 2]
+            file_scores = {}  # path -> score
+            
+            # Use grep for each term, track which files match multiple terms
+            for term in search_terms[:5]:
+                try:
+                    grep_result = subprocess.run(
+                        ["grep", "-l", "-i", term, "-r", str(library_path)],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    for fpath in grep_result.stdout.strip().split("\n"):
+                        if fpath and fpath.endswith(".json"):
+                            file_scores[fpath] = file_scores.get(fpath, 0) + 1
+                except:
+                    pass
+            
+            # Sort by score (files matching more terms first)
+            sorted_files = sorted(file_scores.items(), key=lambda x: x[1], reverse=True)
+            
+            matched = []
+            for fpath, score in sorted_files[:15]:
+                try:
+                    with open(fpath) as f:
+                        entry = json.load(f)
+                    matched.append({
+                        "id": entry.get("id"),
+                        "type": entry.get("type"),
+                        "title": entry.get("title", "")[:100],
+                        "content": entry.get("content", "")[:500],
+                        "tags": entry.get("tags", []),
+                        "match_score": score
+                    })
+                except:
+                    pass
+            
+            # Dedupe and add (highest scores first)
+            seen_ids = {e.get("id") for e in results["entries"]}
+            for m in matched:
+                if m.get("id") not in seen_ids:
+                    results["entries"].append(m)
+                    seen_ids.add(m.get("id"))
+            
+            if matched:
+                results["sources"].append("icloud_library")
+    except Exception as e:
+        print(f"iCloud search failed: {e}", file=sys.stderr)
+    
+    # 3. Also get DLI context (pattern + external)
+    try:
+        dli_result = get_context_from_dli(query, focus)
+        if dli_result and dli_result.get("context"):
+            results["dli_context"] = dli_result.get("context", "")[:2000]
+            results["sources"].append(dli_result.get("source", "dli"))
+    except Exception as e:
+        print(f"DLI context failed: {e}", file=sys.stderr)
+    
+    # Calculate confidence
+    results["confidence"] = min(0.95, 0.3 + (len(results["entries"]) * 0.1))
+    results["entry_count"] = len(results["entries"])
+    
+    # Build combined context string
+    context_parts = []
+    for entry in results["entries"][:8]:
+        entry_str = f"[{entry.get('type', 'unknown').upper()}] {entry.get('id', '')}: {entry.get('title', entry.get('content', '')[:80])}"
+        context_parts.append(entry_str)
+    
+    if results.get("dli_context"):
+        context_parts.append(f"\n[DLI] {results['dli_context'][:500]}")
+    
+    results["context"] = "\n".join(context_parts)
+    
+    return results
+
+
+def run_http_server(port: int = 5171):
+    """Run Jh Brain as an HTTP server for gateway integration."""
+    from fastapi import FastAPI
+    from pydantic import BaseModel
+    import uvicorn
+    
+    app = FastAPI(title="Jh Brain HTTP Bridge")
+    
+    class ContextRequest(BaseModel):
+        query: str
+        focus: str = "global"
+    
+    class PreflightRequest(BaseModel):
+        text: str
+    
+    @app.post("/context")
+    def get_context(request: ContextRequest):
+        """Get comprehensive 8825 context using multi-tool search."""
+        return comprehensive_search(request.query, request.focus)
+    
+    @app.post("/preflight")
+    def preflight(request: PreflightRequest):
+        """Run preflight analysis - tells Maestra what tools to use."""
+        from preflight import get_context_injection, format_injection
+        context = get_context_injection(request.text)
+        if context:
+            context["formatted"] = format_injection(context)
+        return context or {"is_internal": False, "message": "Not an 8825 internal request"}
+    
+    @app.post("/orchestrate")
+    def orchestrate(request: ContextRequest):
+        """
+        Full orchestration: preflight → decide strategy → execute → return results.
+        This is what Maestra should call - Jh Brain directs the entire flow.
+        """
+        from preflight import get_context_injection
+        
+        # Step 1: Preflight analysis
+        preflight_result = get_context_injection(request.query)
+        
+        # Step 2: Decide search strategy based on preflight
+        search_results = comprehensive_search(request.query, request.focus)
+        
+        # Step 3: Build orchestrated response
+        response = {
+            "query": request.query,
+            "preflight": preflight_result,
+            "context": search_results.get("context", ""),
+            "entries": search_results.get("entries", []),
+            "sources": search_results.get("sources", []),
+            "confidence": search_results.get("confidence", 0),
+            "recommended_tools": [],
+            "search_strategy_used": ["icloud_library", "dli"]
+        }
+        
+        # Add tool recommendations from preflight
+        if preflight_result and preflight_result.get("tools_found"):
+            response["recommended_tools"].append(preflight_result.get("primary_tool", {}))
+            if preflight_result.get("mistral_suggestion"):
+                response["recommended_tools"].append({
+                    "type": "mistral_specialist",
+                    **preflight_result["mistral_suggestion"]
+                })
+        
+        return response
+    
+    @app.post("/query")
+    def query_tool(request: ContextRequest):
+        """Find the best tool for a need."""
+        return find_tool_for_need(request.query)
+    
+    @app.get("/health")
+    def health():
+        return {"status": "ok", "service": "jh-brain"}
+    
+    print(f"🧠 Jh Brain HTTP server starting on port {port}", file=sys.stderr)
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--http":
+        port = int(sys.argv[2]) if len(sys.argv) > 2 else 5171
+        run_http_server(port)
+    else:
+        main()
