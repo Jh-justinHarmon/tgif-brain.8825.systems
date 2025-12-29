@@ -1,2 +1,2 @@
-run = "pip install -r requirements.txt && gunicorn jh_brain_sse_server_fixed:app --bind 0.0.0.0: --workers 1 --timeout 120"
+run = "pip install -r requirements.txt && python main.py"
 language = "python3"
